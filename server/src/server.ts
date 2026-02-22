@@ -586,9 +586,11 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
         // Determine indent changes
         const trimmedLower = trimmed.toLowerCase();
 
-        // Count braces for object/array literals (outside strings)
+        // Count braces and parens outside strings
         const openBraces = countBracesOutsideStrings(trimmed, '{');
         const closeBraces = countBracesOutsideStrings(trimmed, '}');
+        const openParens = countBracesOutsideStrings(trimmed, '(');
+        const closeParens = countBracesOutsideStrings(trimmed, ')');
 
         // Check if this line is self-contained (has 'end' on the same line)
         const isSelfContained = hasEndOnLine.test(trimmedLower) && !blockEnd.test(trimmedLower);
@@ -616,6 +618,11 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
             currentIndent = Math.max(0, currentIndent - closeBraces);
         }
 
+        // Decrease indent for closing parens at the start of a line
+        if (trimmed.startsWith(')')) {
+            currentIndent = Math.max(0, currentIndent - closeParens);
+        }
+
         // Apply current indent
         const indentedLine = indent.repeat(currentIndent) + trimmed;
         formattedLines.push(indentedLine);
@@ -635,13 +642,17 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
         }
 
         // Handle brace-based indentation for object/array literals
-        // If line doesn't start with '}', process closing braces for balance
         if (!trimmed.startsWith('}')) {
-            // Net effect: openBraces increase, closeBraces decrease
             currentIndent = Math.max(0, currentIndent + openBraces - closeBraces);
         } else {
-            // Line started with '}', we already decreased, now add opens
             currentIndent = currentIndent + openBraces;
+        }
+
+        // Handle paren-based indentation for multi-line function calls
+        if (!trimmed.startsWith(')')) {
+            currentIndent = Math.max(0, currentIndent + openParens - closeParens);
+        } else {
+            currentIndent = currentIndent + openParens;
         }
     }
 
