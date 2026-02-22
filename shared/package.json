@@ -1,0 +1,6 @@
+{
+  "name": "jyro-shared",
+  "version": "1.0.0",
+  "main": "./out/stdlib.js",
+  "types": "./out/stdlib.d.ts"
+}

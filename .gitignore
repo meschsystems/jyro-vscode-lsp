@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+client/out/
+server/out/
+shared/out/
+*.vsix
+*.tsbuildinfo
+.claude/
+.vscode/
