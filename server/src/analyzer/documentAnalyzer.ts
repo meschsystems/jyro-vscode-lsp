@@ -120,9 +120,10 @@ export class DocumentAnalyzer {
             const closeBracket = (line.match(/\]/g) || []).length;
 
             // Check block structure (elseif is a continuation, not a new block)
+            // Note: case/default do NOT get their own 'end' — only switch does
             const startsWithElseif = /^\s*elseif\b/i.test(trimmed);
-            if (!startsWithElseif && /\b(if|while|for|foreach|switch|case|default)\b/.test(trimmedWithoutStrings)) {
-                const match = trimmedWithoutStrings.match(/\b(if|while|for|foreach|switch|case|default)\b/);
+            if (!startsWithElseif && /\b(if|while|for|foreach|switch)\b/.test(trimmedWithoutStrings)) {
+                const match = trimmedWithoutStrings.match(/\b(if|while|for|foreach|switch)\b/);
                 if (match) {
                     blockStack.push({ type: match[1], line: lineIndex });
                     if (match[1] === 'while' || match[1] === 'foreach' || match[1] === 'for') {
@@ -381,6 +382,13 @@ export class DocumentAnalyzer {
                 // PascalCase function calls are handled separately with Information severity in checkSyntax
                 const afterIdent = lineWithoutComments.substring(endPos).match(/^\s*\(/);
                 if (afterIdent) {
+                    continue;
+                }
+
+                // Skip object literal keys (identifier followed by colon, not ::)
+                // Pattern: { key: value } — the key is not a variable reference
+                const afterKey = lineWithoutComments.substring(endPos).match(/^\s*:/);
+                if (afterKey && lineWithoutComments[endPos + afterKey[0].length] !== ':') {
                     continue;
                 }
 

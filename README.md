@@ -137,6 +137,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Support
 
 For information, issues and feature requests, please visit:
-- [GitHub Issues](https://github.com/meschsystems/Mesch.Jyro.VSCode/issues)
+- [GitHub Issues](https://github.com/meschsystems/jyro-vscode-lsp/issues)
 - [Jyro Documentation](https://docs.mesch.cloud/jyro/)
 - [Jyro Website](https://www.jyro.dev)

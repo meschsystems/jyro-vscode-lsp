@@ -332,7 +332,7 @@ connection.onHover((params: HoverParams): Hover | null => {
         { word: 'then', desc: 'Used after condition in if/case statements' },
         { word: 'else', desc: 'Alternative branch in conditional' },
         { word: 'elseif', desc: 'Alternative conditional branch (else if combined)' },
-        { word: 'end', desc: 'Ends a block (if/while/for/foreach/switch/case/default)' },
+        { word: 'end', desc: 'Ends a block (if/while/for/foreach/switch)' },
         { word: 'while', desc: 'While loop statement' },
         { word: 'do', desc: 'Marks the start of a loop/switch body' },
         { word: 'for', desc: 'Range-based for loop: for i in 0 to 10 do ... end' },
@@ -342,8 +342,8 @@ connection.onHover((params: HoverParams): Hover | null => {
         { word: 'downto', desc: 'Defines descending lower bound in a for loop range (exclusive)' },
         { word: 'by', desc: 'Defines the step size in a for loop range' },
         { word: 'switch', desc: 'Switch statement for multiple conditions' },
-        { word: 'case', desc: 'Case block in switch statement. Supports multiple values: case val1, val2 then ... end' },
-        { word: 'default', desc: 'Default case block in switch statement: default then ... end' },
+        { word: 'case', desc: 'Case block in switch statement. Supports multiple values: case val1, val2 then ...' },
+        { word: 'default', desc: 'Default case block in switch statement: default then ...' },
         { word: 'break', desc: 'Exits the current loop' },
         { word: 'continue', desc: 'Skips to the next iteration of the loop' },
         { word: 'return', desc: 'Returns from the script with an optional value' },
@@ -553,9 +553,13 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
     // Keywords that increase indent after the line
     const indentIncreaseAfter = /^(if|while|for|foreach|switch|case|default)\b/;
     const blockContinue = /^(else|elseif)\b/;
+    const caseContinue = /^(case|default)\b/;
     const blockEnd = /^end\b/;
     const thenOrDo = /\b(then|do)\b/;
     const hasEndOnLine = /\bend\b/;
+
+    // Track whether we're inside a case body (to know when to de-indent for next case)
+    let inCaseBody = false;
 
     // Split lines on statement keywords that appear mid-line
     const lines: string[] = [];
@@ -589,9 +593,22 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
         // Check if this line is self-contained (has 'end' on the same line)
         const isSelfContained = hasEndOnLine.test(trimmedLower) && !blockEnd.test(trimmedLower);
 
-        // Decrease indent before 'end', 'else', 'elseif', 'case', 'default'
+        // Decrease indent before 'end', 'else', 'elseif'
         if (blockEnd.test(trimmedLower) || blockContinue.test(trimmedLower)) {
-            currentIndent = Math.max(0, currentIndent - 1);
+            // 'end' after a case body needs to drop 2 levels (case body + switch body)
+            if (blockEnd.test(trimmedLower) && inCaseBody) {
+                currentIndent = Math.max(0, currentIndent - 2);
+                inCaseBody = false;
+            } else {
+                currentIndent = Math.max(0, currentIndent - 1);
+            }
+        }
+
+        // Decrease indent before 'case'/'default' only if inside a previous case body
+        if (caseContinue.test(trimmedLower)) {
+            if (inCaseBody) {
+                currentIndent = Math.max(0, currentIndent - 1);
+            }
         }
 
         // Decrease indent for closing braces at the start of a line
@@ -604,10 +621,15 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
         formattedLines.push(indentedLine);
 
         // Increase indent after block-starting keywords with 'then' or 'do'
-        // or after 'else', 'elseif', 'case', 'default'
+        // or after 'else', 'elseif'
         if (!isSelfContained) {
-            if ((indentIncreaseAfter.test(trimmedLower) && thenOrDo.test(trimmedLower)) ||
-                blockContinue.test(trimmedLower)) {
+            if (indentIncreaseAfter.test(trimmedLower) && thenOrDo.test(trimmedLower)) {
+                currentIndent++;
+                // Track when we enter a case body
+                if (caseContinue.test(trimmedLower)) {
+                    inCaseBody = true;
+                }
+            } else if (blockContinue.test(trimmedLower)) {
                 currentIndent++;
             }
         }
