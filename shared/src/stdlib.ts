@@ -1049,6 +1049,16 @@ export const STDLIB_FUNCTIONS: FunctionSignature[] = [
         description: 'Serializes a value to a JSON string',
         examples: ['ToJson(Data.user) # Returns JSON representation']
     },
+    {
+        name: 'Sleep',
+        category: 'Utility',
+        parameters: [
+            { name: 'ms', type: JyroType.Number, description: 'Non-negative integer milliseconds to pause' }
+        ],
+        returnType: JyroType.Null,
+        description: 'Pauses script execution for the specified number of milliseconds. Negative or non-integer values raise a runtime error.',
+        examples: ['Sleep(100) # Pauses for 100 milliseconds', 'Sleep(0) # No-op, returns immediately']
+    },
 
     // ===== Schema Validation Functions (2) =====
     {

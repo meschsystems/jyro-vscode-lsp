@@ -171,6 +171,21 @@ export class DocumentAnalyzer {
                 }
             }
 
+            // Check for invalid Sleep() argument (non-positive literal)
+            const sleepMatch = trimmedWithoutStrings.match(/\bSleep\s*\(\s*(-?\d+(?:\.\d+)?)\s*\)/);
+            if (sleepMatch) {
+                const sleepValue = parseFloat(sleepMatch[1]);
+                if (sleepValue <= 0) {
+                    const sleepPos = line.indexOf(sleepMatch[0]);
+                    const valueStart = sleepPos + sleepMatch[0].indexOf(sleepMatch[1]);
+                    this.addDiagnostic(
+                        lineIndex, valueStart, lineIndex, valueStart + sleepMatch[1].length,
+                        'Sleep() requires a positive integer millisecond value',
+                        DiagnosticSeverity.Error
+                    );
+                }
+            }
+
             // Check for invalid type annotations (only in var declarations)
             // Pattern: var name: type - must start with 'var' to be a type annotation
             if (/^\s*var\s+/.test(trimmed)) {
