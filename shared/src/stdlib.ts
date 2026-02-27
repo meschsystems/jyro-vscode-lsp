@@ -1059,6 +1059,19 @@ export const STDLIB_FUNCTIONS: FunctionSignature[] = [
         description: 'Pauses script execution for the specified number of milliseconds. Negative or non-integer values raise a runtime error.',
         examples: ['Sleep(100) # Pauses for 100 milliseconds', 'Sleep(0) # No-op, returns immediately']
     },
+    {
+        name: 'Diff',
+        category: 'Utility',
+        parameters: [
+            { name: 'obj1', type: JyroType.Object, description: 'The original object' },
+            { name: 'obj2', type: JyroType.Object, description: 'The updated object' }
+        ],
+        returnType: JyroType.Object,
+        description: 'Compares two objects and returns a structured summary of their differences with three properties: added (in obj2 but not obj1), removed (in obj1 but not obj2), and changed (different values as {from, to} pairs).',
+        examples: [
+            'var d = Diff({name: "Alice", age: 30, city: "NYC"}, {name: "Alice", age: 31, email: "a@b.com"})\n# d.added   = {email: "a@b.com"}\n# d.removed = {city: "NYC"}\n# d.changed = {age: {from: 30, to: 31}}'
+        ]
+    },
 
     // ===== Schema Validation Functions (2) =====
     {

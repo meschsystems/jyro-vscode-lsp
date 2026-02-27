@@ -145,7 +145,7 @@
       "patterns": [
         {
           "name": "entity.name.function.jyro",
-          "match": "\\b(ToUpper|ToLower|Trim|Replace|Contains|StartsWith|EndsWith|Split|Join|Substring|ToNumber|PadLeft|PadRight|RegexTest|RegexMatch|RegexMatchAll|RegexMatchDetail|RandomString|Length|Append|Prepend|First|Last|IndexOf|Reverse|Slice|Concatenate|Distinct|Sort|Flatten|FlattenOnce|Range|Skip|Insert|RemoveAt|RemoveFirst|RemoveLast|RandomChoice|SortByField|GroupBy|SelectMany|Abs|Floor|Ceiling|Min|Max|Power|SquareRoot|Log|Sum|Average|Clamp|Median|Mode|RandomInt|Now|Today|ParseDate|FormatDate|DateAdd|DateDiff|DatePart|WhereByField|FindByField|AnyByField|AllByField|CountIf|Select|Project|Omit|Map|Where|Reduce|Each|Find|All|Any|SortBy|TypeOf|Equal|NotEqual|Coalesce|ToString|ToBoolean|Keys|Values|HasProperty|Merge|Clone|NewGuid|Base64Encode|Base64Decode|FromJson|ToJson|ValidateRequired|ValidateSchema)\\b"
+          "match": "\\b(ToUpper|ToLower|Trim|Replace|Contains|StartsWith|EndsWith|Split|Join|Substring|ToNumber|PadLeft|PadRight|RegexTest|RegexMatch|RegexMatchAll|RegexMatchDetail|RandomString|Length|Append|Prepend|First|Last|IndexOf|Reverse|Slice|Concatenate|Distinct|Sort|Flatten|FlattenOnce|Range|Skip|Insert|RemoveAt|RemoveFirst|RemoveLast|RandomChoice|SortByField|GroupBy|SelectMany|Abs|Floor|Ceiling|Min|Max|Power|SquareRoot|Log|Sum|Average|Clamp|Median|Mode|RandomInt|Now|Today|ParseDate|FormatDate|DateAdd|DateDiff|DatePart|WhereByField|FindByField|AnyByField|AllByField|CountIf|Select|Project|Omit|Map|Where|Reduce|Each|Find|All|Any|SortBy|TypeOf|Equal|NotEqual|Coalesce|ToString|ToBoolean|Keys|Values|HasProperty|Merge|Clone|NewGuid|Base64Encode|Base64Decode|FromJson|ToJson|Sleep|Diff|ValidateRequired|ValidateSchema)\\b"
         }
       ]
     },
