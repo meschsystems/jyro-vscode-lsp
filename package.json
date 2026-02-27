@@ -2,7 +2,7 @@
   "name": "jyro-vscode",
   "displayName": "Jyro",
   "description": "Full language server support for the Jyro scripting language",
-  "version": "1.1.13",
+  "version": "1.1.14",
   "publisher": "meschsystems",
   "license": "MIT",
   "repository": {
