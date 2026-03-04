@@ -477,14 +477,14 @@ export const STDLIB_FUNCTIONS: FunctionSignature[] = [
 
     // ===== Math Functions (14) =====
     {
-        name: 'Abs',
+        name: 'Absolute',
         category: 'Math',
         parameters: [
             { name: 'n', type: JyroType.Number, description: 'The number' }
         ],
         returnType: JyroType.Number,
         description: 'Returns the absolute value of a number',
-        examples: ['Abs(-5) # Returns 5']
+        examples: ['Absolute(-5) # Returns 5']
     },
     {
         name: 'Floor',
@@ -897,28 +897,6 @@ export const STDLIB_FUNCTIONS: FunctionSignature[] = [
         returnType: JyroType.String,
         description: 'Returns the type name: "null", "boolean", "number", "string", "array", or "object"',
         examples: ['TypeOf(42) # Returns "number"', 'TypeOf([1, 2]) # Returns "array"']
-    },
-    {
-        name: 'Equal',
-        category: 'Utility',
-        parameters: [
-            { name: 'a', type: anyType, description: 'First value' },
-            { name: 'b', type: anyType, description: 'Second value' }
-        ],
-        returnType: JyroType.Boolean,
-        description: 'Performs deep value equality comparison',
-        examples: ['Equal([1, 2], [1, 2]) # Returns true']
-    },
-    {
-        name: 'NotEqual',
-        category: 'Utility',
-        parameters: [
-            { name: 'a', type: anyType, description: 'First value' },
-            { name: 'b', type: anyType, description: 'Second value' }
-        ],
-        returnType: JyroType.Boolean,
-        description: 'Returns true if values are not deeply equal',
-        examples: ['NotEqual([1, 2], [1, 3]) # Returns true']
     },
     {
         name: 'Coalesce',

@@ -283,14 +283,14 @@
     "body": [
       "return"
     ],
-    "description": "Return from the script"
+    "description": "Return from a function"
   },
   "Return with Value": {
     "prefix": "returnm",
     "body": [
       "return ${1:value}"
     ],
-    "description": "Return from the script with a value"
+    "description": "Return from a function with a value"
   },
   "Fail": {
     "prefix": "fail",
@@ -438,6 +438,68 @@
       "RegexTest(${1:text}, \"${2:pattern}\")"
     ],
     "description": "Test if pattern matches text"
+  },
+  "Function Declaration": {
+    "prefix": "func",
+    "body": [
+      "func ${1:Name}(${2:params})",
+      "\t$0",
+      "end"
+    ],
+    "description": "User-defined function"
+  },
+  "Function with Return": {
+    "prefix": "funcr",
+    "body": [
+      "func ${1:Name}(${2:params})",
+      "\treturn ${3:value}",
+      "end"
+    ],
+    "description": "User-defined function with return"
+  },
+  "Union Declaration": {
+    "prefix": "union",
+    "body": [
+      "union ${1:Name}",
+      "\t${2:Variant1}(${3:field: type})",
+      "\t${4:Variant2}(${5:field: type})",
+      "end"
+    ],
+    "description": "Discriminated union type"
+  },
+  "Match Statement": {
+    "prefix": "match",
+    "body": [
+      "match ${1:expression} do",
+      "\tcase ${2:Variant}(${3:bindings}) then",
+      "\t\t$0",
+      "end"
+    ],
+    "description": "Match statement for union destructuring"
+  },
+  "Match Expression": {
+    "prefix": "matchexpr",
+    "body": [
+      "match ${1:expression} do",
+      "\tcase ${2:Variant1}(${3:bindings}) then ${4:value1}",
+      "\tcase ${5:Variant2}(${6:bindings}) then ${7:value2}",
+      "end"
+    ],
+    "description": "Match expression (inline variant dispatch)"
+  },
+  "Exit": {
+    "prefix": "exit",
+    "body": [
+      "exit"
+    ],
+    "description": "Exit the script cleanly"
+  },
+  "Exit with Message": {
+    "prefix": "exitm",
+    "body": [
+      "exit \"${1:message}\""
+    ],
+    "description": "Exit the script with a message"
   },
   "Regex Match Detail": {
     "prefix": "regexmatchdetail",

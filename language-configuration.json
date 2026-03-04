@@ -23,12 +23,12 @@
   ],
   "folding": {
     "markers": {
-      "start": "^\\s*(if|while|for|foreach|switch|case|default)\\b",
+      "start": "^\\s*(if|while|for|foreach|switch|case|default|func|union|match)\\b",
       "end": "^\\s*end\\b"
     }
   },
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*((if|elseif|while|for|foreach|switch|case|default)\\b.*(do|then)\\s*$|(else)\\s*$)",
+    "increaseIndentPattern": "^\\s*((if|elseif|while|for|foreach|switch|case|default|match)\\b.*(do|then)\\s*$|(else)\\s*$|func\\b.*\\)\\s*$|union\\b.*$)",
     "decreaseIndentPattern": "^\\s*(end|else|elseif)\\b"
   },
   "onEnterRules": [
@@ -40,6 +40,24 @@
     },
     {
       "beforeText": "^\\s*(else)\\s*$",
+      "action": {
+        "indent": "indent"
+      }
+    },
+    {
+      "beforeText": "^\\s*func\\s+\\w+\\s*\\(.*\\)\\s*$",
+      "action": {
+        "indent": "indent"
+      }
+    },
+    {
+      "beforeText": "^\\s*union\\s+\\w+\\s*$",
+      "action": {
+        "indent": "indent"
+      }
+    },
+    {
+      "beforeText": "^\\s*match\\s+.+\\s+do\\s*$",
       "action": {
         "indent": "indent"
       }

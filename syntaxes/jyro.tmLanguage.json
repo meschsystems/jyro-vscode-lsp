@@ -9,7 +9,10 @@
     { "include": "#constants" },
     { "include": "#strings" },
     { "include": "#numbers" },
+    { "include": "#func-definition" },
+    { "include": "#union-definition" },
     { "include": "#functions" },
+    { "include": "#function-calls" },
     { "include": "#data-keyword" },
     { "include": "#variables" },
     { "include": "#punctuation" }
@@ -27,7 +30,7 @@
       "patterns": [
         {
           "name": "keyword.control.flow.jyro",
-          "match": "(?<!\\.)\\b(if|then|else|elseif|end|while|do|for|foreach|in|to|downto|by|switch|case|default|return|fail|break|continue)\\b"
+          "match": "(?<!\\.)\\b(if|then|else|elseif|end|while|do|for|foreach|in|to|downto|by|switch|case|default|return|fail|break|continue|func|union|match|exit)\\b"
         },
         {
           "name": "keyword.declaration.jyro",
@@ -141,11 +144,41 @@
         }
       ]
     },
+    "func-definition": {
+      "patterns": [
+        {
+          "match": "(?<=\\bfunc\\s)\\s*([A-Za-z_]\\w*)",
+          "captures": {
+            "1": { "name": "entity.name.function.definition.jyro" }
+          }
+        }
+      ]
+    },
+    "union-definition": {
+      "patterns": [
+        {
+          "match": "(?<=\\bunion\\s)\\s*([A-Z]\\w*)",
+          "captures": {
+            "1": { "name": "entity.name.type.union.jyro" }
+          }
+        }
+      ]
+    },
     "functions": {
       "patterns": [
         {
           "name": "entity.name.function.jyro",
-          "match": "\\b(ToUpper|ToLower|Trim|Replace|Contains|StartsWith|EndsWith|Split|Join|Substring|ToNumber|PadLeft|PadRight|RegexTest|RegexMatch|RegexMatchAll|RegexMatchDetail|RandomString|Length|Append|Prepend|First|Last|IndexOf|Reverse|Slice|Concatenate|Distinct|Sort|Flatten|FlattenOnce|Range|Skip|Insert|RemoveAt|RemoveFirst|RemoveLast|RandomChoice|SortByField|GroupBy|SelectMany|Abs|Floor|Ceiling|Min|Max|Power|SquareRoot|Log|Sum|Average|Clamp|Median|Mode|RandomInt|Now|Today|ParseDate|FormatDate|DateAdd|DateDiff|DatePart|WhereByField|FindByField|AnyByField|AllByField|CountIf|Select|Project|Omit|Map|Where|Reduce|Each|Find|All|Any|SortBy|TypeOf|Equal|NotEqual|Coalesce|ToString|ToBoolean|Keys|Values|HasProperty|Merge|Clone|NewGuid|Base64Encode|Base64Decode|FromJson|ToJson|Sleep|Diff|ValidateRequired|ValidateSchema)\\b"
+          "match": "\\b(ToUpper|ToLower|Trim|Replace|Contains|StartsWith|EndsWith|Split|Join|Substring|ToNumber|PadLeft|PadRight|RegexTest|RegexMatch|RegexMatchAll|RegexMatchDetail|RandomString|Length|Append|Prepend|First|Last|IndexOf|Reverse|Slice|Concatenate|Distinct|Sort|Flatten|FlattenOnce|Range|Skip|Insert|RemoveAt|RemoveFirst|RemoveLast|RandomChoice|SortByField|GroupBy|SelectMany|Absolute|Floor|Ceiling|Min|Max|Power|SquareRoot|Log|Sum|Average|Clamp|Median|Mode|RandomInt|Now|Today|ParseDate|FormatDate|DateAdd|DateDiff|DatePart|WhereByField|FindByField|AnyByField|AllByField|CountIf|Select|Project|Omit|Map|Where|Reduce|Each|Find|All|Any|SortBy|TypeOf|Coalesce|ToString|ToBoolean|Keys|Values|HasProperty|Merge|Clone|NewGuid|Base64Encode|Base64Decode|FromJson|ToJson|Sleep|Diff|ValidateRequired|ValidateSchema)\\b"
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "match": "(?<!\\.)\\b([A-Z][a-zA-Z0-9]*)(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.jyro" }
+          }
         }
       ]
     },

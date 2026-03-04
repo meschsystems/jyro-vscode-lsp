@@ -17,6 +17,25 @@ export interface AnalyzerOptions {
     warnOnHostFunctions: boolean;
 }
 
+export interface UserFunctionInfo {
+    name: string;
+    params: Array<{ name: string; type?: string }>;
+    line: number;
+    character: number;
+}
+
+export interface UnionInfo {
+    name: string;
+    variants: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>;
+    line: number;
+}
+
+export interface VariantConstructorInfo {
+    variantName: string;
+    unionName: string;
+    fields: Array<{ name: string; type?: string }>;
+}
+
 export class DocumentAnalyzer {
     private text: string;
     private uri: string;
@@ -25,11 +44,18 @@ export class DocumentAnalyzer {
     private symbols: SymbolInfo[] = [];
     private options: AnalyzerOptions;
 
+    // User-defined declarations (populated by extractDeclarations pre-pass)
+    private userFunctions: Map<string, UserFunctionInfo> = new Map();
+    private unionDefinitions: Map<string, UnionInfo> = new Map();
+    private variantConstructors: Map<string, VariantConstructorInfo> = new Map();
+    private declarationsExtracted = false;
+
     // Keywords and tokens
     private readonly keywords = [
         'var', 'if', 'then', 'else', 'elseif', 'end', 'switch', 'do', 'case', 'default',
         'while', 'for', 'foreach', 'in', 'to', 'downto', 'by', 'return', 'fail', 'break', 'continue',
-        'true', 'false', 'null', 'and', 'or', 'not', 'is', 'Data'
+        'true', 'false', 'null', 'and', 'or', 'not', 'is', 'Data',
+        'func', 'union', 'match', 'exit'
     ];
 
     private readonly typeKeywords = ['number', 'string', 'boolean', 'object', 'array'];
@@ -50,6 +76,7 @@ export class DocumentAnalyzer {
         this.diagnostics = [];
         this.symbols = [];
 
+        this.extractDeclarations();
         this.checkSyntax();
         this.extractSymbols();
         this.validateSemantics();
@@ -62,9 +89,114 @@ export class DocumentAnalyzer {
      */
     public getSymbols(): SymbolInfo[] {
         if (this.symbols.length === 0) {
+            this.ensureDeclarations();
             this.extractSymbols();
         }
         return this.symbols;
+    }
+
+    /**
+     * Get user-defined functions
+     */
+    public getUserFunctions(): Map<string, UserFunctionInfo> {
+        this.ensureDeclarations();
+        return this.userFunctions;
+    }
+
+    /**
+     * Get union definitions
+     */
+    public getUnionDefinitions(): Map<string, UnionInfo> {
+        this.ensureDeclarations();
+        return this.unionDefinitions;
+    }
+
+    /**
+     * Get variant constructors (maps variant name -> info)
+     */
+    public getVariantConstructors(): Map<string, VariantConstructorInfo> {
+        this.ensureDeclarations();
+        return this.variantConstructors;
+    }
+
+    private ensureDeclarations(): void {
+        if (!this.declarationsExtracted) {
+            this.extractDeclarations();
+        }
+    }
+
+    /**
+     * Pre-pass: extract all func and union declarations (hoisted)
+     */
+    private extractDeclarations(): void {
+        this.userFunctions.clear();
+        this.unionDefinitions.clear();
+        this.variantConstructors.clear();
+        this.declarationsExtracted = true;
+
+        for (let i = 0; i < this.lines.length; i++) {
+            const trimmed = this.lines[i].trim();
+            if (trimmed.startsWith('#') || trimmed.length === 0) continue;
+
+            const withoutComments = trimmed.replace(/#.*$/, '');
+            const clean = this.removeStringLiterals(withoutComments);
+
+            // Extract func declarations
+            const funcMatch = clean.match(/^func\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+            if (funcMatch) {
+                const funcName = funcMatch[1];
+                const params = this.parseFuncParams(funcMatch[2]);
+                const charPos = this.lines[i].indexOf(funcName);
+                this.userFunctions.set(funcName, {
+                    name: funcName,
+                    params,
+                    line: i,
+                    character: charPos
+                });
+            }
+
+            // Extract union declarations
+            const unionMatch = clean.match(/^union\s+([A-Z]\w*)/);
+            if (unionMatch) {
+                const unionName = unionMatch[1];
+                const variants: Array<{ name: string; fields: Array<{ name: string; type?: string }> }> = [];
+
+                let j = i + 1;
+                while (j < this.lines.length) {
+                    const variantLine = this.lines[j].trim();
+                    if (/^end\b/.test(variantLine)) break;
+                    if (variantLine.startsWith('#') || variantLine === '') { j++; continue; }
+
+                    const variantClean = this.removeStringLiterals(variantLine.replace(/#.*$/, ''));
+                    const variantMatch = variantClean.match(/^([A-Z]\w*)\s*\(([^)]*)\)/);
+                    if (variantMatch) {
+                        const variantName = variantMatch[1];
+                        const fields = this.parseFuncParams(variantMatch[2]);
+                        variants.push({ name: variantName, fields });
+                        this.variantConstructors.set(variantName, {
+                            variantName,
+                            unionName,
+                            fields
+                        });
+                    }
+                    j++;
+                }
+
+                this.unionDefinitions.set(unionName, {
+                    name: unionName,
+                    variants,
+                    line: i
+                });
+            }
+        }
+    }
+
+    private parseFuncParams(paramStr: string): Array<{ name: string; type?: string }> {
+        if (!paramStr.trim()) return [];
+        return paramStr.split(',').map(p => {
+            const parts = p.trim().split(':').map(s => s.trim());
+            return { name: parts[0], type: parts[1] || undefined };
+        });
     }
 
     /**
@@ -73,6 +205,7 @@ export class DocumentAnalyzer {
     private checkSyntax(): void {
         let blockStack: Array<{ type: string; line: number }> = [];
         let inLoop = 0;
+        let inFunc = 0;
         let afterTerminator = false;
 
         this.lines.forEach((line, lineIndex) => {
@@ -98,7 +231,7 @@ export class DocumentAnalyzer {
             }
             if (isBlockBoundary) {
                 afterTerminator = false;
-            } else if (/^(return|fail)\b/.test(trimmedWithoutStrings)) {
+            } else if (/^(return|fail|exit)\b/.test(trimmedWithoutStrings)) {
                 afterTerminator = true;
             }
 
@@ -122,14 +255,33 @@ export class DocumentAnalyzer {
             // Check block structure (elseif is a continuation, not a new block)
             // Note: case/default do NOT get their own 'end' — only switch does
             const startsWithElseif = /^\s*elseif\b/i.test(trimmed);
-            if (!startsWithElseif && /\b(if|while|for|foreach|switch)\b/.test(trimmedWithoutStrings)) {
-                const match = trimmedWithoutStrings.match(/\b(if|while|for|foreach|switch)\b/);
+            if (!startsWithElseif && /\b(if|while|for|foreach|switch|func|union|match)\b/.test(trimmedWithoutStrings)) {
+                const match = trimmedWithoutStrings.match(/\b(if|while|for|foreach|switch|func|union|match)\b/);
                 if (match) {
                     blockStack.push({ type: match[1], line: lineIndex });
                     if (match[1] === 'while' || match[1] === 'foreach' || match[1] === 'for') {
                         inLoop++;
                     }
+                    if (match[1] === 'func') {
+                        inFunc++;
+                    }
                 }
+            }
+
+            // Validate func/union must be at top level
+            if (/^func\b/.test(trimmedWithoutStrings) && blockStack.length > 1) {
+                this.addDiagnostic(
+                    lineIndex, 0, lineIndex, trimmed.length,
+                    'Function declarations must be at the top level of the script',
+                    DiagnosticSeverity.Error
+                );
+            }
+            if (/^union\b/.test(trimmedWithoutStrings) && blockStack.length > 1) {
+                this.addDiagnostic(
+                    lineIndex, 0, lineIndex, trimmed.length,
+                    'Union declarations must be at the top level of the script',
+                    DiagnosticSeverity.Error
+                );
             }
 
             if (/\bend\b/.test(trimmedWithoutStrings)) {
@@ -144,6 +296,9 @@ export class DocumentAnalyzer {
                     if (block.type === 'while' || block.type === 'foreach' || block.type === 'for') {
                         inLoop--;
                     }
+                    if (block.type === 'func') {
+                        inFunc--;
+                    }
                 }
             }
 
@@ -152,6 +307,15 @@ export class DocumentAnalyzer {
                 this.addDiagnostic(
                     lineIndex, 0, lineIndex, trimmed.length,
                     `"${trimmedWithoutStrings.includes('break') ? 'break' : 'continue'}" can only be used inside loops`,
+                    DiagnosticSeverity.Error
+                );
+            }
+
+            // Check for return outside functions
+            if (/\breturn\b/.test(trimmedWithoutStrings) && inFunc === 0) {
+                this.addDiagnostic(
+                    lineIndex, 0, lineIndex, trimmed.length,
+                    '"return" can only be used inside functions. Use "exit" for script termination.',
                     DiagnosticSeverity.Error
                 );
             }
@@ -217,6 +381,13 @@ export class DocumentAnalyzer {
                     if (this.keywords.includes(funcName)) {
                         continue;
                     }
+                    // Skip user-defined functions and variant constructors
+                    if (this.userFunctions.has(funcName)) {
+                        continue;
+                    }
+                    if (this.variantConstructors.has(funcName)) {
+                        continue;
+                    }
                     if (!this.functionNames.includes(funcName)) {
                         // Calculate correct position: leading whitespace + match position in trimmed
                         const leadingWhitespace = line.length - line.trimStart().length;
@@ -247,6 +418,34 @@ export class DocumentAnalyzer {
      */
     private extractSymbols(): void {
         const seenProps = new Set<string>();  // Track property assignments across entire document
+
+        // Add user-defined function declarations as symbols
+        for (const [, funcInfo] of this.userFunctions) {
+            this.symbols.push({
+                name: funcInfo.name,
+                type: 'function',
+                line: funcInfo.line,
+                character: funcInfo.character
+            });
+        }
+
+        // Add union definitions and variant constructors as symbols
+        for (const [, unionInfo] of this.unionDefinitions) {
+            this.symbols.push({
+                name: unionInfo.name,
+                type: 'union',
+                line: unionInfo.line,
+                character: this.lines[unionInfo.line].indexOf(unionInfo.name)
+            });
+            for (const variant of unionInfo.variants) {
+                this.symbols.push({
+                    name: variant.name,
+                    type: 'constructor',
+                    line: unionInfo.line,
+                    character: 0
+                });
+            }
+        }
 
         this.lines.forEach((line, lineIndex) => {
             const trimmed = line.trim();
@@ -353,6 +552,41 @@ export class DocumentAnalyzer {
                     });
                 }
             }
+
+            // Extract func parameter names (scoped to the function body)
+            const funcParamMatch = trimmed.match(/^func\s+[A-Za-z_]\w*\s*\(([^)]*)\)/);
+            if (funcParamMatch && funcParamMatch[1].trim()) {
+                const params = funcParamMatch[1].split(',');
+                for (const param of params) {
+                    const paramName = param.trim().split(':')[0].trim();
+                    if (paramName && /^\w+$/.test(paramName)) {
+                        this.symbols.push({
+                            name: paramName,
+                            type: 'parameter',
+                            line: lineIndex,
+                            character: line.indexOf(paramName)
+                        });
+                    }
+                }
+            }
+
+            // Extract match case bindings: case VariantName(a, b) then
+            const matchCasePattern = /\bcase\s+[A-Z]\w*\s*\(([^)]+)\)\s+then/g;
+            let matchCaseMatch;
+            while ((matchCaseMatch = matchCasePattern.exec(trimmed)) !== null) {
+                const bindingsStr = matchCaseMatch[1];
+                const bindings = bindingsStr.split(',').map(b => b.trim());
+                for (const binding of bindings) {
+                    if (binding && /^\w+$/.test(binding)) {
+                        this.symbols.push({
+                            name: binding,
+                            type: 'match-binding',
+                            line: lineIndex,
+                            character: line.indexOf(binding, matchCaseMatch.index)
+                        });
+                    }
+                }
+            }
         });
     }
 
@@ -362,6 +596,13 @@ export class DocumentAnalyzer {
     private validateSemantics(): void {
         const declaredVars = new Set<string>(this.symbols.map(s => s.name));
         declaredVars.add('Data'); // Data is always available
+        // Add user function names and variant constructor names
+        for (const funcName of this.userFunctions.keys()) {
+            declaredVars.add(funcName);
+        }
+        for (const variantName of this.variantConstructors.keys()) {
+            declaredVars.add(variantName);
+        }
 
         this.lines.forEach((line, lineIndex) => {
             const trimmed = line.trim();

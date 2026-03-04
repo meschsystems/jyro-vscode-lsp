@@ -32,7 +32,7 @@ import {
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { STDLIB_FUNCTIONS, getFunctionSignature, getAllFunctionNames, FunctionSignature, FunctionParameter } from '../../shared';
-import { DocumentAnalyzer } from './analyzer/documentAnalyzer';
+import { DocumentAnalyzer, UserFunctionInfo, VariantConstructorInfo } from './analyzer/documentAnalyzer';
 
 // Create a connection for the server using Node's IPC
 const connection = createConnection(ProposedFeatures.all);
@@ -198,7 +198,8 @@ connection.onCompletion(
         const keywords = [
             'var', 'if', 'then', 'else', 'elseif', 'end', 'switch', 'do', 'case', 'default',
             'while', 'for', 'foreach', 'in', 'to', 'downto', 'by', 'return', 'fail', 'break', 'continue',
-            'true', 'false', 'null', 'and', 'or', 'not', 'is'
+            'true', 'false', 'null', 'and', 'or', 'not', 'is',
+            'func', 'union', 'match', 'exit'
         ];
 
         keywords.forEach(keyword => {
@@ -242,16 +243,58 @@ connection.onCompletion(
             data: { type: 'data' }
         });
 
-        // Analyze document for variable completions
+        // Analyze document for variable, function, and constructor completions
         const analyzer = new DocumentAnalyzer(text, document.uri);
         const symbols = analyzer.getSymbols();
+
+        // Track what we've already added to avoid duplicates
+        const addedSymbols = new Set<string>();
+
         symbols.forEach(symbol => {
-            completions.push({
-                label: symbol.name,
-                kind: CompletionItemKind.Variable,
-                detail: symbol.type || 'unknown',
-                data: { type: 'variable', symbol }
-            });
+            // Skip duplicates
+            if (addedSymbols.has(symbol.name)) return;
+            addedSymbols.add(symbol.name);
+
+            if (symbol.type === 'function') {
+                const userFunc = analyzer.getUserFunctions().get(symbol.name);
+                const paramList = userFunc ? userFunc.params.map(p => p.type ? `${p.name}: ${p.type}` : p.name).join(', ') : '';
+                completions.push({
+                    label: symbol.name,
+                    kind: CompletionItemKind.Function,
+                    detail: `func ${symbol.name}(${paramList})`,
+                    documentation: 'User-defined function',
+                    insertText: `${symbol.name}($1)`,
+                    insertTextFormat: 2,
+                    data: { type: 'user-function', name: symbol.name }
+                });
+            } else if (symbol.type === 'constructor') {
+                const variant = analyzer.getVariantConstructors().get(symbol.name);
+                const fieldList = variant ? variant.fields.map(f => f.type ? `${f.name}: ${f.type}` : f.name).join(', ') : '';
+                completions.push({
+                    label: symbol.name,
+                    kind: CompletionItemKind.Constructor,
+                    detail: `${symbol.name}(${fieldList})`,
+                    documentation: variant ? `Variant constructor of union ${variant.unionName}` : 'Variant constructor',
+                    insertText: `${symbol.name}($1)`,
+                    insertTextFormat: 2,
+                    data: { type: 'variant-constructor', name: symbol.name }
+                });
+            } else if (symbol.type === 'union') {
+                completions.push({
+                    label: symbol.name,
+                    kind: CompletionItemKind.Enum,
+                    detail: `union ${symbol.name}`,
+                    documentation: 'Discriminated union type',
+                    data: { type: 'union', name: symbol.name }
+                });
+            } else {
+                completions.push({
+                    label: symbol.name,
+                    kind: CompletionItemKind.Variable,
+                    detail: symbol.type || 'unknown',
+                    data: { type: 'variable', symbol }
+                });
+            }
         });
 
         return completions;
@@ -325,6 +368,35 @@ connection.onHover((params: HoverParams): Hover | null => {
         };
     }
 
+    // Check if it's a user-defined function
+    const hoverAnalyzer = new DocumentAnalyzer(text, document.uri);
+    const userFuncs = hoverAnalyzer.getUserFunctions();
+    const userFunc = userFuncs.get(word);
+    if (userFunc) {
+        const paramList = userFunc.params.map(p => p.type ? `${p.name}: ${p.type}` : p.name).join(', ');
+        return {
+            contents: {
+                kind: 'markdown',
+                value: `**${userFunc.name}**(${paramList})\n\nUser-defined function`
+            },
+            range: wordRange
+        };
+    }
+
+    // Check if it's a variant constructor
+    const variantConstructors = hoverAnalyzer.getVariantConstructors();
+    const variantInfo = variantConstructors.get(word);
+    if (variantInfo) {
+        const fieldList = variantInfo.fields.map(f => f.type ? `${f.name}: ${f.type}` : f.name).join(', ');
+        return {
+            contents: {
+                kind: 'markdown',
+                value: `**${word}**(${fieldList})\n\nVariant constructor of union \`${variantInfo.unionName}\``
+            },
+            range: wordRange
+        };
+    }
+
     // Check if it's a keyword
     const keywords = [
         { word: 'var', desc: 'Variable declaration keyword' },
@@ -332,7 +404,7 @@ connection.onHover((params: HoverParams): Hover | null => {
         { word: 'then', desc: 'Used after condition in if/case statements' },
         { word: 'else', desc: 'Alternative branch in conditional' },
         { word: 'elseif', desc: 'Alternative conditional branch (else if combined)' },
-        { word: 'end', desc: 'Ends a block (if/while/for/foreach/switch)' },
+        { word: 'end', desc: 'Ends a block (if/while/for/foreach/switch/func/union/match)' },
         { word: 'while', desc: 'While loop statement' },
         { word: 'do', desc: 'Marks the start of a loop/switch body' },
         { word: 'for', desc: 'Range-based for loop: for i in 0 to 10 do ... end' },
@@ -346,8 +418,12 @@ connection.onHover((params: HoverParams): Hover | null => {
         { word: 'default', desc: 'Default case block in switch statement: default then ...' },
         { word: 'break', desc: 'Exits the current loop' },
         { word: 'continue', desc: 'Skips to the next iteration of the loop' },
-        { word: 'return', desc: 'Returns from the script with an optional value' },
+        { word: 'return', desc: 'Returns a value from a function. Only valid inside func blocks.' },
         { word: 'fail', desc: 'Terminates script execution with an error. Can include an optional message.' },
+        { word: 'func', desc: 'Declares a user-defined function. Syntax: func Name(params) ... end. Functions are hoisted and must be declared at the top level.' },
+        { word: 'union', desc: 'Declares a discriminated union type. Syntax: union Name Variant1(fields) Variant2(fields) end. Variants become constructor functions.' },
+        { word: 'match', desc: 'Destructures a union value, branching by variant. Requires exhaustive coverage of all variants. Syntax: match expr do case Variant(bindings) then ... end' },
+        { word: 'exit', desc: 'Terminates the entire script cleanly with an optional message. Valid anywhere in the script.' },
         { word: 'Data', desc: 'The shared data context between the script and its host' }
     ];
 
@@ -403,29 +479,67 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 
     const funcName = funcNameMatch[1];
     const funcSig = getFunctionSignature(funcName);
-    if (!funcSig) {
-        return null;
-    }
 
     // Count which parameter we're on
     const callText = text.substring(funcStart + 1, offset);
     const commaCount = (callText.match(/,/g) || []).length;
-    const activeParameter = Math.min(commaCount, funcSig.parameters.length - 1);
 
-    return {
-        signatures: [
-            {
-                label: `${funcSig.name}(${funcSig.parameters.map((p: FunctionParameter) => `${p.name}: ${Array.isArray(p.type) ? p.type.join(' | ') : p.type}`).join(', ')})`,
-                documentation: funcSig.description,
-                parameters: funcSig.parameters.map((p: FunctionParameter) => ({
+    if (funcSig) {
+        const activeParameter = Math.min(commaCount, funcSig.parameters.length - 1);
+        return {
+            signatures: [
+                {
+                    label: `${funcSig.name}(${funcSig.parameters.map((p: FunctionParameter) => `${p.name}: ${Array.isArray(p.type) ? p.type.join(' | ') : p.type}`).join(', ')})`,
+                    documentation: funcSig.description,
+                    parameters: funcSig.parameters.map((p: FunctionParameter) => ({
+                        label: p.name,
+                        documentation: p.description
+                    }))
+                }
+            ],
+            activeSignature: 0,
+            activeParameter
+        };
+    }
+
+    // Check user-defined functions and variant constructors
+    const sigAnalyzer = new DocumentAnalyzer(text, document.uri);
+
+    const userFunc = sigAnalyzer.getUserFunctions().get(funcName);
+    if (userFunc && userFunc.params.length > 0) {
+        const activeParameter = Math.min(commaCount, userFunc.params.length - 1);
+        return {
+            signatures: [{
+                label: `${userFunc.name}(${userFunc.params.map(p => p.type ? `${p.name}: ${p.type}` : p.name).join(', ')})`,
+                documentation: 'User-defined function',
+                parameters: userFunc.params.map(p => ({
                     label: p.name,
-                    documentation: p.description
+                    documentation: p.type ? `Type: ${p.type}` : 'Any type'
                 }))
-            }
-        ],
-        activeSignature: 0,
-        activeParameter
-    };
+            }],
+            activeSignature: 0,
+            activeParameter
+        };
+    }
+
+    const variantInfo = sigAnalyzer.getVariantConstructors().get(funcName);
+    if (variantInfo && variantInfo.fields.length > 0) {
+        const activeParameter = Math.min(commaCount, variantInfo.fields.length - 1);
+        return {
+            signatures: [{
+                label: `${variantInfo.variantName}(${variantInfo.fields.map(f => f.type ? `${f.name}: ${f.type}` : f.name).join(', ')})`,
+                documentation: `Variant constructor of union ${variantInfo.unionName}`,
+                parameters: variantInfo.fields.map(f => ({
+                    label: f.name,
+                    documentation: f.type ? `Type: ${f.type}` : 'Any type'
+                }))
+            }],
+            activeSignature: 0,
+            activeParameter
+        };
+    }
+
+    return null;
 });
 
 // Definition provider - Go to Definition (Ctrl+Click)
@@ -551,7 +665,7 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
     let currentIndent = 0;
 
     // Keywords that increase indent after the line
-    const indentIncreaseAfter = /^(if|while|for|foreach|switch|case|default)\b/;
+    const indentIncreaseAfter = /^(if|while|for|foreach|switch|case|default|match)\b/;
     const blockContinue = /^(else|elseif)\b/;
     const caseContinue = /^(case|default)\b/;
     const blockEnd = /^end\b/;
@@ -638,6 +752,10 @@ function formatJyroDocument(text: string, options: { tabSize: number; insertSpac
                 }
             } else if (blockContinue.test(trimmedLower)) {
                 currentIndent++;
+            } else if (/^func\b/.test(trimmedLower)) {
+                currentIndent++;
+            } else if (/^union\b/.test(trimmedLower)) {
+                currentIndent++;
             }
         }
 
@@ -695,7 +813,7 @@ function splitOnKeywords(line: string): string[] {
 
     // Check if this is a self-contained block (e.g., "if x then y end")
     // These should NOT be split - they're intentionally on one line
-    const isSelfContainedBlock = /^(if|while|for|foreach|switch|else|elseif|case|default)\b/.test(trimmedLower) &&
+    const isSelfContainedBlock = /^(if|while|for|foreach|switch|else|elseif|case|default|func|match)\b/.test(trimmedLower) &&
         /\b(then|do)\b/.test(trimmedLower) &&
         /\bend\s*$/.test(trimmedLower);
 
@@ -731,7 +849,7 @@ function splitOnKeywords(line: string): string[] {
             const remaining = trimmed.slice(i);
 
             // Split on statement-starting keywords
-            const statementMatch = remaining.match(/^(var|if|elseif|while|for|foreach|switch|case|default|return|fail|break|continue)\b/i);
+            const statementMatch = remaining.match(/^(var|if|elseif|while|for|foreach|switch|case|default|return|fail|break|continue|func|union|match|exit)\b/i);
             if (statementMatch && current.trim() !== '') {
                 result.push(current.trim());
                 current = '';
@@ -851,7 +969,7 @@ function formatOperators(line: string): string {
     // Remove space between function name and opening paren: SomeFunction ( -> SomeFunction(
     // But preserve space after control keywords: if (, while (, foreach (, switch (
     content = content.replace(/\b(\w+)\s+\(/g, (match, word) => {
-        const keywords = ['if', 'while', 'for', 'foreach', 'switch'];
+        const keywords = ['if', 'while', 'for', 'foreach', 'switch', 'match'];
         if (keywords.includes(word)) {
             return word + ' ('; // Keep single space for keywords
         }

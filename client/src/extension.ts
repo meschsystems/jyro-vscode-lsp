@@ -41,7 +41,8 @@ export function activate(context: ExtensionContext) {
         // Register the server for Jyro documents
         documentSelector: [
             { scheme: 'file', language: 'jyro' },
-            { scheme: 'mesch', language: 'jyro' }
+            { scheme: 'mesch', language: 'jyro' },
+            { scheme: 'realtree', language: 'jyro' }
         ],
         synchronize: {
             // Notify the server about file changes to '.jyro files contained in the workspace
