@@ -457,6 +457,24 @@
     ],
     "description": "User-defined function with return"
   },
+  "Function with Defaults": {
+    "prefix": "funcd",
+    "body": [
+      "func ${1:Name}(${2:param}: ${3:string}, ${4:optParam} = ${5:default})",
+      "\t$0",
+      "end"
+    ],
+    "description": "User-defined function with default parameter values"
+  },
+  "Function with Defaults and Return": {
+    "prefix": "funcrd",
+    "body": [
+      "func ${1:Name}(${2:param}: ${3:string}, ${4:optParam} = ${5:default})",
+      "\treturn ${6:value}",
+      "end"
+    ],
+    "description": "User-defined function with default parameters and return"
+  },
   "Union Declaration": {
     "prefix": "union",
     "body": [

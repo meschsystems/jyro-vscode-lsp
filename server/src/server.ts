@@ -32,7 +32,7 @@ import {
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { STDLIB_FUNCTIONS, getFunctionSignature, getAllFunctionNames, FunctionSignature, FunctionParameter } from '../../shared';
-import { DocumentAnalyzer, UserFunctionInfo, VariantConstructorInfo } from './analyzer/documentAnalyzer';
+import { DocumentAnalyzer, UserFunctionInfo, VariantConstructorInfo, ParamInfo } from './analyzer/documentAnalyzer';
 
 // Create a connection for the server using Node's IPC
 const connection = createConnection(ProposedFeatures.all);
@@ -257,7 +257,12 @@ connection.onCompletion(
 
             if (symbol.type === 'function') {
                 const userFunc = analyzer.getUserFunctions().get(symbol.name);
-                const paramList = userFunc ? userFunc.params.map(p => p.type ? `${p.name}: ${p.type}` : p.name).join(', ') : '';
+                const paramList = userFunc ? userFunc.params.map(p => {
+                    let s = p.name;
+                    if (p.type) s += `: ${p.type}`;
+                    if (p.defaultValue) s += ` = ${p.defaultValue}`;
+                    return s;
+                }).join(', ') : '';
                 completions.push({
                     label: symbol.name,
                     kind: CompletionItemKind.Function,
@@ -269,7 +274,12 @@ connection.onCompletion(
                 });
             } else if (symbol.type === 'constructor') {
                 const variant = analyzer.getVariantConstructors().get(symbol.name);
-                const fieldList = variant ? variant.fields.map(f => f.type ? `${f.name}: ${f.type}` : f.name).join(', ') : '';
+                const fieldList = variant ? variant.fields.map(f => {
+                    let s = f.name;
+                    if (f.type) s += `: ${f.type}`;
+                    if (f.defaultValue) s += ` = ${f.defaultValue}`;
+                    return s;
+                }).join(', ') : '';
                 completions.push({
                     label: symbol.name,
                     kind: CompletionItemKind.Constructor,
@@ -296,6 +306,91 @@ connection.onCompletion(
                 });
             }
         });
+
+        // Named argument completions: when cursor is inside function call parens,
+        // suggest parameter names with `: ` suffix
+        let parenDepth = 0;
+        let callFuncStart = -1;
+        for (let i = offset - 1; i >= 0; i--) {
+            if (text[i] === ')') parenDepth++;
+            else if (text[i] === '(') {
+                if (parenDepth === 0) {
+                    callFuncStart = i;
+                    break;
+                }
+                parenDepth--;
+            }
+        }
+
+        if (callFuncStart >= 0) {
+            const beforeParen = text.substring(0, callFuncStart).trim();
+            const callNameMatch = beforeParen.match(/(\w+)\s*$/);
+            if (callNameMatch) {
+                const callFuncName = callNameMatch[1];
+                const callText = text.substring(callFuncStart + 1, offset);
+
+                // Only suggest named args if the call already uses named syntax or is empty
+                const callAnalyzer = new DocumentAnalyzer(text, document.uri);
+                const parsed = callAnalyzer.parseCallArguments(callText);
+
+                if (parsed.isEmpty || parsed.isNamed) {
+                    let callParams: ParamInfo[] | null = null;
+
+                    // Check user functions
+                    const callUserFunc = callAnalyzer.getUserFunctions().get(callFuncName);
+                    if (callUserFunc) {
+                        callParams = callUserFunc.params;
+                    }
+
+                    // Check variant constructors
+                    if (!callParams) {
+                        const callVariant = callAnalyzer.getVariantConstructors().get(callFuncName);
+                        if (callVariant) {
+                            callParams = callVariant.fields;
+                        }
+                    }
+
+                    // Check stdlib
+                    if (!callParams) {
+                        const callStdlib = getFunctionSignature(callFuncName);
+                        if (callStdlib) {
+                            callParams = callStdlib.parameters.map(p => ({
+                                name: p.name,
+                                type: Array.isArray(p.type) ? p.type.join(' | ') : p.type,
+                                defaultValue: p.defaultValue || (p.optional ? 'null' : undefined)
+                            }));
+                        }
+                    }
+
+                    if (callParams) {
+                        // Determine which param names are already used
+                        const usedNames = new Set(parsed.args.filter(a => a.name).map(a => a.name));
+
+                        callParams.forEach((param, idx) => {
+                            if (!usedNames.has(param.name)) {
+                                let detail = param.name;
+                                if (param.type) detail += `: ${param.type}`;
+                                if (param.defaultValue) detail += ` = ${param.defaultValue}`;
+
+                                completions.push({
+                                    label: `${param.name}: `,
+                                    kind: CompletionItemKind.Property,
+                                    detail,
+                                    documentation: param.defaultValue
+                                        ? `Optional parameter (default: ${param.defaultValue})`
+                                        : 'Required parameter',
+                                    insertText: `${param.name}: $1`,
+                                    insertTextFormat: 2,
+                                    sortText: `0${String(idx).padStart(3, '0')}`,
+                                    filterText: param.name,
+                                    data: { type: 'named-arg', funcName: callFuncName, paramName: param.name }
+                                });
+                            }
+                        });
+                    }
+                }
+            }
+        }
 
         return completions;
     }
@@ -373,7 +468,13 @@ connection.onHover((params: HoverParams): Hover | null => {
     const userFuncs = hoverAnalyzer.getUserFunctions();
     const userFunc = userFuncs.get(word);
     if (userFunc) {
-        const paramList = userFunc.params.map(p => p.type ? `${p.name}: ${p.type}` : p.name).join(', ');
+        const formatParam = (p: ParamInfo) => {
+            let s = p.name;
+            if (p.type) s += `: ${p.type}`;
+            if (p.defaultValue) s += ` = ${p.defaultValue}`;
+            return s;
+        };
+        const paramList = userFunc.params.map(formatParam).join(', ');
         return {
             contents: {
                 kind: 'markdown',
@@ -387,7 +488,13 @@ connection.onHover((params: HoverParams): Hover | null => {
     const variantConstructors = hoverAnalyzer.getVariantConstructors();
     const variantInfo = variantConstructors.get(word);
     if (variantInfo) {
-        const fieldList = variantInfo.fields.map(f => f.type ? `${f.name}: ${f.type}` : f.name).join(', ');
+        const formatField = (f: ParamInfo) => {
+            let s = f.name;
+            if (f.type) s += `: ${f.type}`;
+            if (f.defaultValue) s += ` = ${f.defaultValue}`;
+            return s;
+        };
+        const fieldList = variantInfo.fields.map(formatField).join(', ');
         return {
             contents: {
                 kind: 'markdown',
@@ -484,16 +591,51 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
     const callText = text.substring(funcStart + 1, offset);
     const commaCount = (callText.match(/,/g) || []).length;
 
+    // Check user-defined functions and variant constructors
+    const sigAnalyzer = new DocumentAnalyzer(text, document.uri);
+
+    // Helper: determine active parameter (named arg aware)
+    const getActiveParam = (paramNames: string[], callStr: string, fallbackCount: number): number => {
+        const parsed = sigAnalyzer.parseCallArguments(callStr);
+        if (parsed.isNamed && parsed.args.length > 0) {
+            // Find which named arg the cursor is currently in (the last one)
+            const currentArg = parsed.args[parsed.args.length - 1];
+            if (currentArg.name) {
+                const idx = paramNames.indexOf(currentArg.name);
+                if (idx >= 0) return idx;
+            }
+        }
+        return Math.min(fallbackCount, Math.max(paramNames.length - 1, 0));
+    };
+
+    // Helper: format parameter label with optional default value
+    const formatParamLabel = (name: string, type?: string, defaultValue?: string): string => {
+        let label = name;
+        if (type) label += `: ${type}`;
+        if (defaultValue) label += ` = ${defaultValue}`;
+        return label;
+    };
+
+    // Helper: format parameter documentation
+    const formatParamDoc = (desc: string, defaultValue?: string, optional?: boolean): string => {
+        if (defaultValue) return `${desc} (optional, default: ${defaultValue})`;
+        if (optional) return `${desc} (optional)`;
+        return desc;
+    };
+
     if (funcSig) {
-        const activeParameter = Math.min(commaCount, funcSig.parameters.length - 1);
+        const paramNames = funcSig.parameters.map((p: FunctionParameter) => p.name);
+        const activeParameter = getActiveParam(paramNames, callText, commaCount);
         return {
             signatures: [
                 {
-                    label: `${funcSig.name}(${funcSig.parameters.map((p: FunctionParameter) => `${p.name}: ${Array.isArray(p.type) ? p.type.join(' | ') : p.type}`).join(', ')})`,
+                    label: `${funcSig.name}(${funcSig.parameters.map((p: FunctionParameter) =>
+                        formatParamLabel(p.name, Array.isArray(p.type) ? p.type.join(' | ') : p.type, p.defaultValue)
+                    ).join(', ')})`,
                     documentation: funcSig.description,
                     parameters: funcSig.parameters.map((p: FunctionParameter) => ({
                         label: p.name,
-                        documentation: p.description
+                        documentation: formatParamDoc(p.description, p.defaultValue, p.optional)
                     }))
                 }
             ],
@@ -502,19 +644,22 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
         };
     }
 
-    // Check user-defined functions and variant constructors
-    const sigAnalyzer = new DocumentAnalyzer(text, document.uri);
-
     const userFunc = sigAnalyzer.getUserFunctions().get(funcName);
     if (userFunc && userFunc.params.length > 0) {
-        const activeParameter = Math.min(commaCount, userFunc.params.length - 1);
+        const paramNames = userFunc.params.map(p => p.name);
+        const activeParameter = getActiveParam(paramNames, callText, commaCount);
         return {
             signatures: [{
-                label: `${userFunc.name}(${userFunc.params.map(p => p.type ? `${p.name}: ${p.type}` : p.name).join(', ')})`,
+                label: `${userFunc.name}(${userFunc.params.map(p =>
+                    formatParamLabel(p.name, p.type, p.defaultValue)
+                ).join(', ')})`,
                 documentation: 'User-defined function',
                 parameters: userFunc.params.map(p => ({
                     label: p.name,
-                    documentation: p.type ? `Type: ${p.type}` : 'Any type'
+                    documentation: formatParamDoc(
+                        p.type ? `Type: ${p.type}` : 'Any type',
+                        p.defaultValue
+                    )
                 }))
             }],
             activeSignature: 0,
@@ -524,14 +669,20 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 
     const variantInfo = sigAnalyzer.getVariantConstructors().get(funcName);
     if (variantInfo && variantInfo.fields.length > 0) {
-        const activeParameter = Math.min(commaCount, variantInfo.fields.length - 1);
+        const paramNames = variantInfo.fields.map(f => f.name);
+        const activeParameter = getActiveParam(paramNames, callText, commaCount);
         return {
             signatures: [{
-                label: `${variantInfo.variantName}(${variantInfo.fields.map(f => f.type ? `${f.name}: ${f.type}` : f.name).join(', ')})`,
+                label: `${variantInfo.variantName}(${variantInfo.fields.map(f =>
+                    formatParamLabel(f.name, f.type, f.defaultValue)
+                ).join(', ')})`,
                 documentation: `Variant constructor of union ${variantInfo.unionName}`,
                 parameters: variantInfo.fields.map(f => ({
                     label: f.name,
-                    documentation: f.type ? `Type: ${f.type}` : 'Any type'
+                    documentation: formatParamDoc(
+                        f.type ? `Type: ${f.type}` : 'Any type',
+                        f.defaultValue
+                    )
                 }))
             }],
             activeSignature: 0,

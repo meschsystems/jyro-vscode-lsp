@@ -4,7 +4,7 @@
  */
 
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
-import { getAllFunctionNames } from '../../../shared';
+import { getAllFunctionNames, getFunctionSignature } from '../../../shared';
 
 export interface SymbolInfo {
     name: string;
@@ -17,23 +17,29 @@ export interface AnalyzerOptions {
     warnOnHostFunctions: boolean;
 }
 
+export interface ParamInfo {
+    name: string;
+    type?: string;
+    defaultValue?: string;
+}
+
 export interface UserFunctionInfo {
     name: string;
-    params: Array<{ name: string; type?: string }>;
+    params: ParamInfo[];
     line: number;
     character: number;
 }
 
 export interface UnionInfo {
     name: string;
-    variants: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>;
+    variants: Array<{ name: string; fields: ParamInfo[] }>;
     line: number;
 }
 
 export interface VariantConstructorInfo {
     variantName: string;
     unionName: string;
-    fields: Array<{ name: string; type?: string }>;
+    fields: ParamInfo[];
 }
 
 export class DocumentAnalyzer {
@@ -147,6 +153,21 @@ export class DocumentAnalyzer {
                 const funcName = funcMatch[1];
                 const params = this.parseFuncParams(funcMatch[2]);
                 const charPos = this.lines[i].indexOf(funcName);
+                // Validate default param ordering: required params must precede optional params
+                let seenDefault = false;
+                for (const param of params) {
+                    if (param.defaultValue) {
+                        seenDefault = true;
+                    } else if (seenDefault) {
+                        const paramPos = this.lines[i].indexOf(param.name, this.lines[i].indexOf('('));
+                        this.addDiagnostic(
+                            i, paramPos >= 0 ? paramPos : 0, i, paramPos >= 0 ? paramPos + param.name.length : 0,
+                            `Parameter "${param.name}" without default value must appear before parameters with default values`,
+                            DiagnosticSeverity.Error
+                        );
+                    }
+                }
+
                 this.userFunctions.set(funcName, {
                     name: funcName,
                     params,
@@ -159,7 +180,7 @@ export class DocumentAnalyzer {
             const unionMatch = clean.match(/^union\s+([A-Z]\w*)/);
             if (unionMatch) {
                 const unionName = unionMatch[1];
-                const variants: Array<{ name: string; fields: Array<{ name: string; type?: string }> }> = [];
+                const variants: Array<{ name: string; fields: ParamInfo[] }> = [];
 
                 let j = i + 1;
                 while (j < this.lines.length) {
@@ -191,12 +212,51 @@ export class DocumentAnalyzer {
         }
     }
 
-    private parseFuncParams(paramStr: string): Array<{ name: string; type?: string }> {
+    private parseFuncParams(paramStr: string): ParamInfo[] {
         if (!paramStr.trim()) return [];
         return paramStr.split(',').map(p => {
-            const parts = p.trim().split(':').map(s => s.trim());
-            return { name: parts[0], type: parts[1] || undefined };
+            const trimmed = p.trim();
+            const result: ParamInfo = { name: '' };
+
+            // Check for default value (first '=' that isn't ==, =>, !=, +=, -=, *=, /=, %=)
+            const eqIndex = this.findDefaultValueSeparator(trimmed);
+
+            let nameAndType: string;
+            if (eqIndex >= 0) {
+                nameAndType = trimmed.substring(0, eqIndex).trim();
+                result.defaultValue = trimmed.substring(eqIndex + 1).trim();
+            } else {
+                nameAndType = trimmed;
+            }
+
+            // Check for type annotation (name: type)
+            const colonIndex = nameAndType.indexOf(':');
+            if (colonIndex >= 0) {
+                result.name = nameAndType.substring(0, colonIndex).trim();
+                result.type = nameAndType.substring(colonIndex + 1).trim() || undefined;
+            } else {
+                result.name = nameAndType;
+            }
+
+            return result;
         });
+    }
+
+    /**
+     * Finds the first '=' in a parameter string that is a default value separator,
+     * not part of ==, =>, !=, +=, -=, *=, /=, or %=
+     */
+    private findDefaultValueSeparator(param: string): number {
+        for (let i = 0; i < param.length; i++) {
+            if (param[i] === '=') {
+                // Skip compound operators: ==, =>
+                if (param[i + 1] === '=' || param[i + 1] === '>') continue;
+                // Skip operators ending with =: !=, +=, -=, *=, /=, %=
+                if (i > 0 && '!+-*/%'.includes(param[i - 1])) continue;
+                return i;
+            }
+        }
+        return -1;
     }
 
     /**
@@ -207,6 +267,7 @@ export class DocumentAnalyzer {
         let inLoop = 0;
         let inFunc = 0;
         let afterTerminator = false;
+        let terminatorExprDepth = 0; // Track unclosed brackets/braces/parens in terminator expression
 
         this.lines.forEach((line, lineIndex) => {
             const trimmed = line.trim();
@@ -220,19 +281,37 @@ export class DocumentAnalyzer {
             const withoutComments = trimmed.replace(/#.*$/, '');
             const trimmedWithoutStrings = this.removeStringLiterals(withoutComments);
 
-            // Check for unreachable code after return/fail
-            const isBlockBoundary = /^(end|else|elseif|case|default)\b/.test(trimmedWithoutStrings);
-            if (afterTerminator && !isBlockBoundary) {
-                this.addDiagnostic(
-                    lineIndex, 0, lineIndex, trimmed.length,
-                    'Unreachable code detected',
-                    DiagnosticSeverity.Warning
-                );
-            }
-            if (isBlockBoundary) {
-                afterTerminator = false;
-            } else if (/^(return|fail|exit)\b/.test(trimmedWithoutStrings)) {
-                afterTerminator = true;
+            // Track continuation of a multi-line terminator expression (return/fail/exit with unclosed delimiters)
+            if (terminatorExprDepth > 0) {
+                terminatorExprDepth += this.countDelimiterBalance(trimmedWithoutStrings);
+                if (terminatorExprDepth <= 0) {
+                    terminatorExprDepth = 0;
+                    afterTerminator = true;
+                }
+                // This line is part of the terminator expression, not unreachable
+                // Continue to other checks but skip the unreachable code check below
+            } else {
+                // Check for unreachable code after return/fail/exit
+                const isBlockBoundary = /^(end|else|elseif|case|default)\b/.test(trimmedWithoutStrings);
+                if (afterTerminator && !isBlockBoundary) {
+                    this.addDiagnostic(
+                        lineIndex, 0, lineIndex, trimmed.length,
+                        'Unreachable code detected',
+                        DiagnosticSeverity.Warning
+                    );
+                }
+                if (isBlockBoundary) {
+                    afterTerminator = false;
+                } else if (/^(return|fail|exit)\b/.test(trimmedWithoutStrings)) {
+                    // Check if the expression is complete on this line
+                    const balance = this.countDelimiterBalance(trimmedWithoutStrings);
+                    if (balance > 0) {
+                        // Expression continues on next line(s)
+                        terminatorExprDepth = balance;
+                    } else {
+                        afterTerminator = true;
+                    }
+                }
             }
 
             // Check for unclosed strings (properly handling escaped quotes)
@@ -320,6 +399,23 @@ export class DocumentAnalyzer {
                 );
             }
 
+            // Check for Data access inside functions
+            if (inFunc > 0 && /\bData\b/.test(trimmedWithoutStrings)) {
+                const dataPattern = /\bData\b/g;
+                let dataMatch;
+                while ((dataMatch = dataPattern.exec(trimmedWithoutStrings)) !== null) {
+                    // Skip if preceded by a dot (e.g. someObj.Data)
+                    if (dataMatch.index > 0 && trimmedWithoutStrings[dataMatch.index - 1] === '.') continue;
+                    const leadingWhitespace = line.length - line.trimStart().length;
+                    const pos = leadingWhitespace + dataMatch.index;
+                    this.addDiagnostic(
+                        lineIndex, pos, lineIndex, pos + 4,
+                        'Data is inaccessible within functions',
+                        DiagnosticSeverity.Warning
+                    );
+                }
+            }
+
             // Check for invalid for-loop step values (by 0 or negative)
             const stepMatch = trimmedWithoutStrings.match(/\bby\s+(-?\d+(?:\.\d+)?)\b/);
             if (stepMatch) {
@@ -402,6 +498,9 @@ export class DocumentAnalyzer {
             }
         });
 
+        // Validate named argument usage in function calls
+        this.validateFunctionCalls();
+
         // Check for unclosed blocks
         if (blockStack.length > 0) {
             const unclosed = blockStack[blockStack.length - 1];
@@ -410,6 +509,181 @@ export class DocumentAnalyzer {
                 `Unclosed "${unclosed.type}" block - missing "end"`,
                 DiagnosticSeverity.Error
             );
+        }
+    }
+
+    /**
+     * Validate named argument usage in function calls
+     */
+    private validateFunctionCalls(): void {
+        // Process each line, tracking multi-line calls via paren depth
+        let pendingCall: {
+            funcName: string;
+            argsText: string;
+            startLine: number;
+            startChar: number;
+            parenDepth: number;
+        } | null = null;
+
+        for (let lineIndex = 0; lineIndex < this.lines.length; lineIndex++) {
+            const line = this.lines[lineIndex];
+            const trimmed = line.trim();
+            if (trimmed.startsWith('#') || trimmed.length === 0) continue;
+
+            const lineWithoutStrings = this.removeStringLiterals(line);
+            const lineWithoutComments = lineWithoutStrings.replace(/#.*$/, '');
+
+            // Continue accumulating a multi-line call
+            if (pendingCall) {
+                pendingCall.parenDepth += this.countDelimiterBalance(lineWithoutComments);
+                pendingCall.argsText += ' ' + lineWithoutComments.trim();
+                if (pendingCall.parenDepth <= 0) {
+                    // Close paren found — remove trailing ) and validate
+                    const closeIdx = pendingCall.argsText.lastIndexOf(')');
+                    if (closeIdx >= 0) {
+                        pendingCall.argsText = pendingCall.argsText.substring(0, closeIdx);
+                    }
+                    this.validateCallArgs(pendingCall.funcName, pendingCall.argsText, pendingCall.startLine, pendingCall.startChar);
+                    pendingCall = null;
+                }
+                continue;
+            }
+
+            // Find function calls on this line: identifier( or identifier (
+            const callPattern = /\b([A-Za-z_]\w*)\s*\(/g;
+            let callMatch;
+
+            while ((callMatch = callPattern.exec(lineWithoutComments)) !== null) {
+                const funcName = callMatch[1];
+                // Skip keywords
+                if (this.keywords.includes(funcName) || this.typeKeywords.includes(funcName)) continue;
+                // Skip non-function keywords that look like calls (if, while, etc.)
+                if (['if', 'while', 'for', 'foreach', 'switch', 'match'].includes(funcName)) continue;
+
+                const openParenPos = lineWithoutComments.indexOf('(', callMatch.index + funcName.length);
+                if (openParenPos < 0) continue;
+
+                const closeParenPos = this.findMatchingParen(lineWithoutComments, openParenPos);
+                if (closeParenPos >= 0) {
+                    // Single-line call
+                    const argsText = lineWithoutComments.substring(openParenPos + 1, closeParenPos);
+                    const leadingWhitespace = line.length - line.trimStart().length;
+                    this.validateCallArgs(funcName, argsText, lineIndex, leadingWhitespace + callMatch.index);
+                } else {
+                    // Multi-line call — start accumulating
+                    const argsText = lineWithoutComments.substring(openParenPos + 1);
+                    const depth = this.countDelimiterBalance(lineWithoutComments.substring(openParenPos));
+                    const leadingWhitespace = line.length - line.trimStart().length;
+                    pendingCall = {
+                        funcName,
+                        argsText,
+                        startLine: lineIndex,
+                        startChar: leadingWhitespace + callMatch.index,
+                        parenDepth: depth
+                    };
+                    break; // Don't look for more calls on this line if we're in a multi-line call
+                }
+            }
+        }
+    }
+
+    /**
+     * Validate the arguments of a single function call
+     */
+    private validateCallArgs(funcName: string, argsText: string, line: number, char: number): void {
+        const parsed = this.parseCallArguments(argsText);
+        if (parsed.isEmpty) return;
+
+        // Check for mixing positional and named
+        if (parsed.isMixed) {
+            this.addDiagnostic(
+                line, char, line, char + funcName.length,
+                `Cannot mix positional and named arguments in call to "${funcName}"`,
+                DiagnosticSeverity.Error
+            );
+            return; // Don't check further if mixed
+        }
+
+        // For positional calls, no named-arg validation needed
+        if (parsed.isPositional) return;
+
+        // Named call validation
+        const namedArgs = parsed.args.filter(a => a.name);
+
+        // Check for duplicate named args
+        const seenNames = new Set<string>();
+        for (const arg of namedArgs) {
+            if (arg.name && seenNames.has(arg.name)) {
+                this.addDiagnostic(
+                    line, char, line, char + funcName.length,
+                    `Duplicate named argument "${arg.name}" in call to "${funcName}"`,
+                    DiagnosticSeverity.Error
+                );
+            }
+            if (arg.name) seenNames.add(arg.name);
+        }
+
+        // Look up the function's parameter list
+        let params: ParamInfo[] | null = null;
+
+        // Check user functions
+        const userFunc = this.userFunctions.get(funcName);
+        if (userFunc) {
+            params = userFunc.params;
+        }
+
+        // Check variant constructors
+        if (!params) {
+            const variant = this.variantConstructors.get(funcName);
+            if (variant) {
+                params = variant.fields;
+            }
+        }
+
+        // Check stdlib functions
+        if (!params) {
+            const stdlibSig = getFunctionSignature(funcName);
+            if (stdlibSig) {
+                params = stdlibSig.parameters.map(p => ({
+                    name: p.name,
+                    type: Array.isArray(p.type) ? p.type.join(' | ') : p.type,
+                    defaultValue: p.optional ? 'null' : undefined
+                }));
+            }
+        }
+
+        // For unknown functions (host functions), only duplicate check above applies
+        if (!params) return;
+
+        const paramNames = new Set(params.map(p => p.name));
+
+        // Check that all named args match known parameter names
+        for (const arg of namedArgs) {
+            if (arg.name && !paramNames.has(arg.name)) {
+                const expected = params.map(p => p.name).join(', ');
+                this.addDiagnostic(
+                    line, char, line, char + funcName.length,
+                    `Unknown parameter "${arg.name}" for function "${funcName}". Expected: ${expected}`,
+                    DiagnosticSeverity.Warning
+                );
+            }
+        }
+
+        // Check that all required (non-defaulted) params are provided
+        const providedNames = new Set(namedArgs.map(a => a.name));
+        for (const param of params) {
+            if (!param.defaultValue && !providedNames.has(param.name)) {
+                // For stdlib, check optional flag instead
+                const stdlibSig = getFunctionSignature(funcName);
+                const stdlibParam = stdlibSig?.parameters.find(p => p.name === param.name);
+                if (stdlibParam?.optional) continue;
+
+                this.addDiagnostic(
+                    line, char, line, char + funcName.length,
+                    `Missing required parameter "${param.name}" in call to "${funcName}"`,
+                    DiagnosticSeverity.Error
+                );
+            }
         }
     }
 
@@ -558,7 +832,7 @@ export class DocumentAnalyzer {
             if (funcParamMatch && funcParamMatch[1].trim()) {
                 const params = funcParamMatch[1].split(',');
                 for (const param of params) {
-                    const paramName = param.trim().split(':')[0].trim();
+                    const paramName = param.trim().split(':')[0].split('=')[0].trim();
                     if (paramName && /^\w+$/.test(paramName)) {
                         this.symbols.push({
                             name: paramName,
@@ -604,11 +878,27 @@ export class DocumentAnalyzer {
             declaredVars.add(variantName);
         }
 
+        // Build a set of lines that are inside union bodies (variant declarations, not code)
+        const unionBodyLines = new Set<number>();
+        for (const unionDef of this.unionDefinitions.values()) {
+            // Lines between `union Name` and `end` are variant declarations
+            for (let j = unionDef.line + 1; j < this.lines.length; j++) {
+                const t = this.lines[j].trim();
+                if (/^end\b/.test(t)) break;
+                unionBodyLines.add(j);
+            }
+        }
+
         this.lines.forEach((line, lineIndex) => {
             const trimmed = line.trim();
 
             // Skip comments and empty lines
             if (trimmed.startsWith('#') || trimmed.length === 0) {
+                return;
+            }
+
+            // Skip union body lines (variant declarations are not code)
+            if (unionBodyLines.has(lineIndex)) {
                 return;
             }
 
@@ -665,6 +955,222 @@ export class DocumentAnalyzer {
                 }
             }
         });
+    }
+
+    /**
+     * Parse function call arguments to detect named argument usage.
+     * Returns info about each argument including whether it's a named arg.
+     * Named args use colon syntax: FuncName(paramName: value)
+     */
+    parseCallArguments(argsText: string): {
+        isNamed: boolean;
+        isPositional: boolean;
+        isMixed: boolean;
+        isEmpty: boolean;
+        args: Array<{ name?: string; valueText: string; nameStart: number; nameEnd: number }>;
+    } {
+        if (!argsText.trim()) {
+            return { isNamed: false, isPositional: false, isMixed: false, isEmpty: true, args: [] };
+        }
+
+        // Split on commas at depth 0, respecting strings and nesting
+        const segments = this.splitArgsAtDepthZero(argsText);
+        const args: Array<{ name?: string; valueText: string; nameStart: number; nameEnd: number }> = [];
+        let namedCount = 0;
+        let positionalCount = 0;
+
+        for (const seg of segments) {
+            const trimmed = seg.text.trim();
+            if (!trimmed) continue;
+
+            // Check for named arg pattern: identifier followed by : (not ::)
+            // Must be at depth 0 and not part of ternary (no ? before the :)
+            const namedMatch = trimmed.match(/^([a-zA-Z_]\w*)\s*:\s*/);
+            if (namedMatch) {
+                // Ensure this : is not part of a ternary by checking no ? precedes it at depth 0
+                const colonPos = trimmed.indexOf(':', namedMatch[1].length);
+                const beforeColon = trimmed.substring(0, colonPos);
+                const hasTernaryQuestion = this.hasQuestionMarkAtDepthZero(beforeColon);
+
+                if (!hasTernaryQuestion && (colonPos + 1 >= trimmed.length || trimmed[colonPos + 1] !== ':')) {
+                    const name = namedMatch[1];
+                    const valueText = trimmed.substring(namedMatch[0].length);
+                    args.push({
+                        name,
+                        valueText,
+                        nameStart: seg.offset + (seg.text.indexOf(name)),
+                        nameEnd: seg.offset + (seg.text.indexOf(name)) + name.length
+                    });
+                    namedCount++;
+                    continue;
+                }
+            }
+
+            // Positional argument
+            args.push({
+                valueText: trimmed,
+                nameStart: seg.offset,
+                nameEnd: seg.offset
+            });
+            positionalCount++;
+        }
+
+        return {
+            isNamed: namedCount > 0 && positionalCount === 0,
+            isPositional: positionalCount > 0 && namedCount === 0,
+            isMixed: namedCount > 0 && positionalCount > 0,
+            isEmpty: false,
+            args
+        };
+    }
+
+    /**
+     * Split argument text on commas at depth zero (respecting nesting and strings)
+     */
+    private splitArgsAtDepthZero(text: string): Array<{ text: string; offset: number }> {
+        const segments: Array<{ text: string; offset: number }> = [];
+        let depth = 0;
+        let inString: false | '"' | "'" = false;
+        let segStart = 0;
+
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+
+            if ((char === '"' || char === "'") && (i === 0 || text[i - 1] !== '\\')) {
+                if (!inString) {
+                    inString = char;
+                } else if (inString === char) {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (inString) continue;
+
+            if (char === '(' || char === '[' || char === '{') {
+                depth++;
+            } else if (char === ')' || char === ']' || char === '}') {
+                depth--;
+            } else if (char === ',' && depth === 0) {
+                segments.push({ text: text.substring(segStart, i), offset: segStart });
+                segStart = i + 1;
+            }
+        }
+
+        // Last segment
+        if (segStart < text.length) {
+            segments.push({ text: text.substring(segStart), offset: segStart });
+        }
+
+        return segments;
+    }
+
+    /**
+     * Check if a string contains a ? at depth zero (for ternary detection)
+     */
+    private hasQuestionMarkAtDepthZero(text: string): boolean {
+        let depth = 0;
+        let inString: false | '"' | "'" = false;
+
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            if ((char === '"' || char === "'") && (i === 0 || text[i - 1] !== '\\')) {
+                if (!inString) inString = char;
+                else if (inString === char) inString = false;
+                continue;
+            }
+            if (inString) continue;
+            if (char === '(' || char === '[' || char === '{') depth++;
+            else if (char === ')' || char === ']' || char === '}') depth--;
+            else if (char === '?' && text[i + 1] !== '?' && depth === 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Collect the character ranges of named argument labels on a line.
+     * Used by validateSemantics() to skip named arg identifiers.
+     */
+    private collectNamedArgRanges(line: string): Array<{ start: number; end: number }> {
+        const ranges: Array<{ start: number; end: number }> = [];
+        // Find all function call patterns: identifier(...)
+        const callPattern = /\b([A-Za-z_]\w*)\s*\(/g;
+        let callMatch;
+
+        while ((callMatch = callPattern.exec(line)) !== null) {
+            const openParenPos = line.indexOf('(', callMatch.index + callMatch[1].length);
+            if (openParenPos < 0) continue;
+
+            // Find matching close paren
+            const closeParenPos = this.findMatchingParen(line, openParenPos);
+            if (closeParenPos < 0) continue;
+
+            const argsText = line.substring(openParenPos + 1, closeParenPos);
+            const parsed = this.parseCallArguments(argsText);
+
+            if (parsed.isNamed || parsed.isMixed) {
+                for (const arg of parsed.args) {
+                    if (arg.name) {
+                        // Offset is relative to argsText, adjust to line position
+                        const absStart = openParenPos + 1 + arg.nameStart;
+                        const absEnd = openParenPos + 1 + arg.nameEnd;
+                        ranges.push({ start: absStart, end: absEnd });
+                    }
+                }
+            }
+        }
+
+        return ranges;
+    }
+
+    /**
+     * Find the matching close paren for an open paren at the given position.
+     * Respects nesting and strings.
+     */
+    private findMatchingParen(text: string, openPos: number): number {
+        let depth = 0;
+        let inString: false | '"' | "'" = false;
+
+        for (let i = openPos; i < text.length; i++) {
+            const char = text[i];
+            if ((char === '"' || char === "'") && (i === 0 || text[i - 1] !== '\\')) {
+                if (!inString) inString = char;
+                else if (inString === char) inString = false;
+                continue;
+            }
+            if (inString) continue;
+            if (char === '(') depth++;
+            else if (char === ')') {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Count the net open delimiters on a line (positive = more opens than closes)
+     * Used to track multi-line expressions in return/fail/exit values
+     */
+    private countDelimiterBalance(line: string): number {
+        let balance = 0;
+        let inString: false | '"' | "'" = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if ((char === '"' || char === "'") && (i === 0 || line[i - 1] !== '\\')) {
+                if (!inString) {
+                    inString = char;
+                } else if (inString === char) {
+                    inString = false;
+                }
+                continue;
+            }
+            if (!inString) {
+                if (char === '(' || char === '[' || char === '{') balance++;
+                else if (char === ')' || char === ']' || char === '}') balance--;
+            }
+        }
+        return balance;
     }
 
     /**

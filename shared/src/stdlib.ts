@@ -9,6 +9,7 @@ export interface FunctionParameter {
     name: string;
     type: JyroType | JyroType[];
     optional?: boolean;
+    defaultValue?: string;
     description: string;
 }
 
