@@ -61,7 +61,7 @@ export class DocumentAnalyzer {
         'var', 'if', 'then', 'else', 'elseif', 'end', 'switch', 'do', 'case', 'default',
         'while', 'for', 'foreach', 'in', 'to', 'downto', 'by', 'return', 'fail', 'break', 'continue',
         'true', 'false', 'null', 'and', 'or', 'not', 'is', 'Data',
-        'func', 'union', 'match', 'exit'
+        'func', 'union', 'match', 'exit', 'delete'
     ];
 
     private readonly typeKeywords = ['number', 'string', 'boolean', 'object', 'array'];
@@ -414,6 +414,16 @@ export class DocumentAnalyzer {
                         DiagnosticSeverity.Warning
                     );
                 }
+            }
+
+            // Check for delete Data (bare) — deleting the entire Data context is not allowed
+            if (/^delete\s+Data\s*$/.test(trimmedWithoutStrings)) {
+                const deletePos = line.indexOf('delete');
+                this.addDiagnostic(
+                    lineIndex, deletePos, lineIndex, deletePos + trimmed.length,
+                    'The Data context may not be deleted',
+                    DiagnosticSeverity.Error
+                );
             }
 
             // Check for invalid for-loop step values (by 0 or negative)

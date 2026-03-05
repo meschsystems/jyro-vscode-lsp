@@ -525,5 +525,19 @@
       "RegexMatchDetail(${1:text}, \"${2:pattern}\")"
     ],
     "description": "Extract first match with metadata (index, groups)"
+  },
+  "Delete Property": {
+    "prefix": "delete",
+    "body": [
+      "delete ${1:obj}.${2:property}"
+    ],
+    "description": "Delete a property from an object"
+  },
+  "Delete Bracket": {
+    "prefix": "deleteb",
+    "body": [
+      "delete ${1:obj}[${2:key}]"
+    ],
+    "description": "Delete a property from an object using bracket notation"
   }
 }

@@ -19,6 +19,7 @@ statement
  | failStmt
  | breakStmt
  | continueStmt
+ | deleteStmt
  | incDecStmt
  | exprStmt
  ;
@@ -80,6 +81,10 @@ breakStmt
 
 continueStmt
  : CONTINUE
+ ;
+
+deleteStmt
+ : DELETE expression
  ;
 
 // ---- Expressions (C#-style precedence) ----
@@ -212,6 +217,7 @@ RETURN : 'return';
 FAIL : 'fail';
 BREAK : 'break';
 CONTINUE : 'continue';
+DELETE : 'delete';
 
 TRUE : 'true';
 FALSE : 'false';
