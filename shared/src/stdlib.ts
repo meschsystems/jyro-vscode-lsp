@@ -476,7 +476,7 @@ export const STDLIB_FUNCTIONS: FunctionSignature[] = [
         examples: ['SelectMany(Data.documents, "tags") # Collects all tags']
     },
 
-    // ===== Math Functions (14) =====
+    // ===== Math Functions (15) =====
     {
         name: 'Absolute',
         category: 'Math',
@@ -506,6 +506,18 @@ export const STDLIB_FUNCTIONS: FunctionSignature[] = [
         returnType: JyroType.Number,
         description: 'Rounds a number up to the nearest integer',
         examples: ['Ceiling(3.2) # Returns 4']
+    },
+    {
+        name: 'Round',
+        category: 'Math',
+        parameters: [
+            { name: 'value', type: JyroType.Number, description: 'The number to round' },
+            { name: 'decimals', type: JyroType.Number, description: 'Number of decimal places (0 for integer, negative for powers of 10)' },
+            { name: 'mode', type: JyroType.String, description: 'Rounding mode: "halfUp" (default), "halfEven", or "halfDown"', optional: true, defaultValue: '"halfUp"' }
+        ],
+        returnType: JyroType.Number,
+        description: 'Rounds a number to a specified number of decimal places with configurable tie-breaking',
+        examples: ['Round(3.456, 2) # Returns 3.46', 'Round(2.5, 0, "halfEven") # Returns 2']
     },
     {
         name: 'Min',
